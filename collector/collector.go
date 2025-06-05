@@ -47,7 +47,7 @@ func maskDsn(dsn string) string {
 }
 
 // NewExporter creates a new Exporter instance
-func NewExporter(logger *slog.Logger, m *MetricsConfiguration) *Exporter {
+func NewExporter(logger *slog.Logger, m *MetricsConfiguration) (*Exporter, error) {
 	var databases []*Database
 	for dbname, dbconfig := range m.Databases {
 		databases = append(databases, NewDatabase(logger, dbname, dbconfig))
@@ -84,8 +84,14 @@ func NewExporter(logger *slog.Logger, m *MetricsConfiguration) *Exporter {
 		lastScraped:          map[string]*time.Time{},
 	}
 	e.metricsToScrape = e.DefaultMetrics()
+	e.reloadMetrics()
 
-	return e
+	if err := m.validateLabelsConsistency(e.metricsToScrape); err != nil {
+		logger.Error("Label consistency validation failed", "error", err)
+		return nil, err
+	}
+
+	return e, nil
 }
 
 // Describe describes all the metrics exported by the Oracle DB exporter.

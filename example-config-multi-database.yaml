@@ -47,6 +47,7 @@ databases:
     # poolMinConnections: 15
 
     ## Optional labels that will be added to all metrics for this database as additional metadata.
+    ## Make sure to define the same set of labels for all databases.
     # labels:
     #   label1: value1
     #   label2: value2
@@ -89,6 +90,7 @@ databases:
     # poolMinConnections: 15
     
     ## Optional labels that will be added to all metrics for this database as additional metadata.
+    ## Make sure to define the same set of labels for all databases.
     # labels:
     #   label1: value1
     #   label2: value2
