@@ -6,12 +6,13 @@ package collector
 import (
 	"database/sql"
 	"fmt"
-	"github.com/godror/godror"
-	"github.com/godror/godror/dsn"
-	"github.com/prometheus/client_golang/prometheus"
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/godror/godror"
+	"github.com/godror/godror/dsn"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func (d *Database) UpMetric() prometheus.Metric {
@@ -57,9 +58,13 @@ func (d *Database) ping(logger *slog.Logger) error {
 }
 
 func (d *Database) constLabels() map[string]string {
-	return map[string]string{
+	labels := map[string]string{
 		"database": d.Name,
 	}
+	for k, v := range d.Config.Labels {
+		labels[k] = v
+	}
+	return labels
 }
 
 func NewDatabase(logger *slog.Logger, dbname string, dbconfig DatabaseConfig) *Database {

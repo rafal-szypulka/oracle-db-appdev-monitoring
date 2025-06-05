@@ -4,14 +4,15 @@
 package collector
 
 import (
-	"github.com/godror/godror/dsn"
-	"github.com/oracle/oracle-db-appdev-monitoring/azvault"
-	"github.com/oracle/oracle-db-appdev-monitoring/ocivault"
-	"gopkg.in/yaml.v2"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/godror/godror/dsn"
+	"github.com/oracle/oracle-db-appdev-monitoring/azvault"
+	"github.com/oracle/oracle-db-appdev-monitoring/ocivault"
+	"gopkg.in/yaml.v2"
 )
 
 type MetricsConfiguration struct {
@@ -26,7 +27,8 @@ type DatabaseConfig struct {
 	Password      string
 	URL           string `yaml:"url"`
 	ConnectConfig `yaml:",inline"`
-	Vault         *VaultConfig `yaml:"vault,omitempty"`
+	Vault         *VaultConfig      `yaml:"vault,omitempty"`
+	Labels        map[string]string `yaml:"labels,omitempty"`
 }
 
 type ConnectConfig struct {

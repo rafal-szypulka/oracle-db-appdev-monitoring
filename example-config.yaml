@@ -42,6 +42,11 @@ databases:
     ## Oracle Database Connection pool minimum size
     # poolMinConnections: 15
 
+    ## Optional labels that will be added to all metrics for this database as additional metadata.
+    # labels:
+    #   label1: value1
+    #   label2: value2
+
 metrics:
   ## How often to scrape metrics. If not provided, metrics will be scraped on request.
   # scrapeInterval: 15s
