@@ -266,9 +266,6 @@ func (m *MetricsConfiguration) validateLabelsConsistency(metrics Metrics) error 
 		fqName := metric.Context
 		for dbName, dbConfig := range m.Databases {
 			combinedLabelsMap := make(map[string]struct{})
-			for _, label := range metric.Labels {
-				combinedLabelsMap[label] = struct{}{}
-			}
 			for labelName := range dbConfig.Labels {
 				combinedLabelsMap[labelName] = struct{}{}
 			}
