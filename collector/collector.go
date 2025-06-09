@@ -94,6 +94,12 @@ func NewExporter(logger *slog.Logger, m *MetricsConfiguration) (*Exporter, error
 		lastScraped:          map[string]*time.Time{},
 	}
 	e.metricsToScrape = e.DefaultMetrics()
+	e.reloadMetrics()
+
+	if err := m.validateLabelsConsistency(e.metricsToScrape); err != nil {
+		logger.Error("Label consistency validation failed", "error", err)
+		return nil, err
+	}
 
 	return e, nil
 }

@@ -4,14 +4,17 @@
 package collector
 
 import (
+	"fmt"
+	"log/slog"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/godror/godror/dsn"
 	"github.com/oracle/oracle-db-appdev-monitoring/azvault"
 	"github.com/oracle/oracle-db-appdev-monitoring/ocivault"
 	"gopkg.in/yaml.v2"
-	"log/slog"
-	"os"
-	"strings"
-	"time"
 )
 
 type MetricsConfiguration struct {
@@ -26,7 +29,8 @@ type DatabaseConfig struct {
 	Password      string
 	URL           string `yaml:"url"`
 	ConnectConfig `yaml:",inline"`
-	Vault         *VaultConfig `yaml:"vault,omitempty"`
+	Vault         *VaultConfig      `yaml:"vault,omitempty"`
+	Labels        map[string]string `yaml:"labels,omitempty"`
 }
 
 type ConnectConfig struct {
@@ -253,4 +257,39 @@ func (m *MetricsConfiguration) defaultDatabase(cfg *Config) DatabaseConfig {
 		}
 	}
 	return dbconfig
+}
+
+func (m *MetricsConfiguration) validateLabelsConsistency(metrics Metrics) error {
+	metricLabelSets := make(map[string][]string)
+
+	for _, metric := range metrics.Metric {
+		fqName := metric.Context
+		for dbName, dbConfig := range m.Databases {
+			combinedLabelsMap := make(map[string]struct{})
+			for _, label := range metric.Labels {
+				combinedLabelsMap[label] = struct{}{}
+			}
+			for labelName := range dbConfig.Labels {
+				combinedLabelsMap[labelName] = struct{}{}
+			}
+			currentLabelNames := make([]string, 0, len(combinedLabelsMap))
+			for labelName := range combinedLabelsMap {
+				currentLabelNames = append(currentLabelNames, labelName)
+			}
+			sort.Strings(currentLabelNames)
+			if existingLabelNames, ok := metricLabelSets[fqName]; ok {
+				if len(existingLabelNames) != len(currentLabelNames) {
+					return fmt.Errorf("Inconsistent label set for metric %q: database %q has labels %v, but another database has %v", fqName, dbName, currentLabelNames, existingLabelNames)
+				}
+				for i, labelName := range currentLabelNames {
+					if labelName != existingLabelNames[i] {
+						return fmt.Errorf("Inconsistent label set for metric %q: database %q has labels %v, but another database has %v", fqName, dbName, currentLabelNames, existingLabelNames)
+					}
+				}
+			} else {
+				metricLabelSets[fqName] = currentLabelNames
+			}
+		}
+	}
+	return nil
 }
