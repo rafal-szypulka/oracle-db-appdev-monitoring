@@ -74,10 +74,18 @@ type LoggingConfig struct {
 	LogDisable     *int           `yaml:"disable"`
 	LogInterval    *time.Duration `yaml:"interval"`
 	LogDestination string         `yaml:"destination"`
+	AddLabelsToLog *bool          `yaml:"labels"`
 }
 
 func (m *MetricsConfiguration) LogDestination() string {
 	return m.Logging.LogDestination
+}
+
+func (m *MetricsConfiguration) AddLabelsToLog() bool {
+	if m.Logging.AddLabelsToLog == nil {
+		return false
+	}
+	return *m.Logging.AddLabelsToLog
 }
 
 func (m *MetricsConfiguration) LogInterval() time.Duration {

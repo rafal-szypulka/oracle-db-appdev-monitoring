@@ -81,6 +81,7 @@ func NewDatabase(logger *slog.Logger, dbname string, dbconfig DatabaseConfig) (*
 		Session: db,
 		Type:    dbtype,
 		Config:  dbconfig,
+		Labels:  dbconfig.Labels,
 	}, nil
 }
 

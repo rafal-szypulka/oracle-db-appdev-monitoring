@@ -7,23 +7,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/oracle/oracle-db-appdev-monitoring/collector"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/oracle/oracle-db-appdev-monitoring/collector"
 )
 
 type LogRecord struct {
-	Timestamp string `json:"timestamp"`
-	ModuleId  string `json:"moduleId"`
-	ECID      string `json:"ecid"`
-	Message   string `json:"message"`
+	Timestamp    string            `json:"timestamp"`
+	ModuleId     string            `json:"moduleId"`
+	ECID         string            `json:"ecid"`
+	Message      string            `json:"message"`
+	DatabaseName string            `json:"database,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
 }
 
 var databaseFailures map[string]int = map[string]int{}
 
-func UpdateLog(logDestination string, logger *slog.Logger, d *collector.Database) {
+func UpdateLog(logDestination string, logger *slog.Logger, d *collector.Database, addLabelsToLog bool) {
 
 	queryFailures := databaseFailures[d.Name]
 	if queryFailures == 3 {
@@ -100,7 +103,7 @@ func UpdateLog(logDestination string, logger *slog.Logger, d *collector.Database
 	var lastLogRecord LogRecord
 	err = json.Unmarshal([]byte(line), &lastLogRecord)
 	if err != nil {
-		logger.Error("Could not parse last line of log file")
+		logger.Error("Could not parse last line of log file", "database", d.Name)
 		return
 	}
 
@@ -135,6 +138,11 @@ func UpdateLog(logDestination string, logger *slog.Logger, d *collector.Database
 
 		// strip the newline from end of message
 		newRecord.Message = strings.TrimSuffix(newRecord.Message, "\n")
+
+		newRecord.DatabaseName = d.Name
+		if addLabelsToLog {
+			newRecord.Labels = d.Labels
+		}
 
 		jsonLogRecord, err := json.Marshal(newRecord)
 		if err != nil {
