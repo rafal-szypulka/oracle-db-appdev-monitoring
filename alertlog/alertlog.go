@@ -27,6 +27,10 @@ type LogRecord struct {
 var databaseFailures map[string]int = map[string]int{}
 
 func UpdateLog(logDestination string, logger *slog.Logger, d *collector.Database, addLabelsToLog bool) {
+	if d.Session == nil {
+		logger.Debug("Database session is nil, skipping alert log update", "database", d.Name)
+		return
+	}
 
 	queryFailures := databaseFailures[d.Name]
 	if queryFailures == 3 {

@@ -52,15 +52,23 @@ func NewExporter(logger *slog.Logger, m *MetricsConfiguration) (*Exporter, error
 	for dbname, dbconfig := range m.Databases {
 		db, err := NewDatabase(logger, dbname, dbconfig)
 		if err != nil {
-			logger.Error("Failed to connect to database, skipping", "database", dbname, "error", err)
-			continue
+			logger.Error("Failed to connect to database, setting status to down", "database", dbname, "error", err)
+			// Create a Database object with Up=0 even if connection fails
+			db = &Database{
+				Name:    dbname,
+				Up:      0,
+				Session: nil, // No active session
+				Type:    0,   // Default type
+				Config:  dbconfig,
+			}
 		}
 		databases = append(databases, db)
 	}
 
-	if len(databases) == 0 {
-		return nil, errors.New("no databases connected successfully")
-	}
+	// If no databases connected successfully, return an error
+	// if len(databases) == 0 {
+	// 	return nil, errors.New("no databases connected successfully")
+	// }
 
 	e := &Exporter{
 		mu: &sync.Mutex{},
@@ -217,6 +225,13 @@ func (e *Exporter) scheduledScrape(tick *time.Time) {
 }
 
 func (e *Exporter) scrapeDatabase(ch chan<- prometheus.Metric, errChan chan<- error, d *Database, tick *time.Time) int {
+	if d.Session == nil {
+		// e.logger.Error("Database session is nil, skipping scrape", "database", d.Name)
+		d.Up = 0 // Ensure Up is 0 if session is nil
+		errChan <- errors.New("database session is nil")
+		return 1
+	}
+
 	if err := d.ping(e.logger); err != nil {
 		e.logger.Error("Error pinging database", "error", err, "database", d.Name)
 		errChan <- err
