@@ -25,7 +25,9 @@ import (
 )
 
 var (
-	hashMap      = make(map[int][]byte)
+	// hashMap stores file hashes per database to detect changes in custom metrics files.
+	// The outer map key is the database name, and the inner map key is the index of the custom metric file.
+	hashMap      = make(map[string]map[int][]byte)
 	namespace    = "oracledb"
 	exporterName = "exporter"
 )
@@ -49,29 +51,10 @@ func maskDsn(dsn string) string {
 // NewExporter creates a new Exporter instance
 func NewExporter(logger *slog.Logger, m *MetricsConfiguration) (*Exporter, error) {
 	var databases []*Database
-	for dbname, dbconfig := range m.Databases {
-		db, err := NewDatabase(logger, dbname, dbconfig)
-		if err != nil {
-			logger.Error("Failed to connect to database, setting status to down", "database", dbname, "error", err)
-			// Create a Database object with Up=0 even if connection fails
-			db = &Database{
-				Name:    dbname,
-				Up:      0,
-				Session: nil, // No active session
-				Type:    0,   // Default type
-				Config:  dbconfig,
-			}
-		}
-		databases = append(databases, db)
-	}
-
-	// If no databases connected successfully, return an error
-	// if len(databases) == 0 {
-	// 	return nil, errors.New("no databases connected successfully")
-	// }
-
 	e := &Exporter{
-		mu: &sync.Mutex{},
+		mu:              &sync.Mutex{},
+		metricsToScrape: make(map[string]Metrics), // Initialize as a map
+		metricsHashMu:   &sync.Mutex{},            // Initialize the new mutex
 		duration: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Subsystem: exporterName,
@@ -98,18 +81,64 @@ func NewExporter(logger *slog.Logger, m *MetricsConfiguration) (*Exporter, error
 		}),
 		logger:               logger,
 		MetricsConfiguration: m,
-		databases:            databases,
 		lastScraped:          map[string]*time.Time{},
 	}
-	e.metricsToScrape = e.DefaultMetrics()
-	e.reloadMetrics()
 
-	if err := m.validateLabelsConsistency(e.metricsToScrape); err != nil {
-		logger.Error("Label consistency validation failed", "error", err)
-		return nil, err
+	for dbname, dbconfig := range m.Databases {
+		db, err := NewDatabase(logger, dbname, dbconfig)
+		if err != nil {
+			logger.Error("Failed to connect to database, setting status to down", "database", dbname, "error", err)
+			db = &Database{
+				Name:    dbname,
+				Up:      0,
+				Session: nil,
+				Type:    0,
+				Config:  dbconfig,
+			}
+		}
+		databases = append(databases, db)
+
+		// Load metrics for this specific database
+		metrics, err := e.loadMetricsForDatabase(dbconfig.Metrics)
+		if err != nil {
+			logger.Error("Failed to load metrics for database", "database", dbname, "error", err)
+			return nil, err // Or handle this more gracefully, e.g., skip this database
+		}
+		e.metricsToScrape[dbname] = *metrics
+
+		if err := m.validateLabelsConsistency(*metrics); err != nil { // Validate labels per database
+			logger.Error("Label consistency validation failed for database", "database", dbname, "error", err)
+			return nil, err
+		}
 	}
+	e.databases = databases
 
 	return e, nil
+}
+
+func (e *Exporter) loadMetricsForDatabase(metricsConfig *MetricsFilesConfig) (*Metrics, error) {
+	metrics := &Metrics{}
+
+	// Load default metrics
+	defaultMetrics := e.DefaultMetrics() // This function is in default_metrics.go
+	metrics.Metric = defaultMetrics.Metric
+
+	// If custom metrics, load them
+	if metricsConfig != nil && len(metricsConfig.Custom) > 0 {
+		for _, customMetricFile := range metricsConfig.Custom {
+			customMetrics := &Metrics{}
+			if _, err := toml.DecodeFile(customMetricFile, customMetrics); err != nil {
+				e.logger.Error("failed to load custom metrics", "file", customMetricFile, "error", err)
+				return nil, fmt.Errorf("error while loading %s: %w", customMetricFile, err)
+			} else {
+				e.logger.Info("Successfully loaded custom metrics from", "file", customMetricFile)
+			}
+			metrics.Metric = append(metrics.Metric, customMetrics.Metric...)
+		}
+	} else {
+		e.logger.Debug("No custom metrics defined for this database.")
+	}
+	return metrics, nil
 }
 
 // Describe describes all the metrics exported by the Oracle DB exporter.
@@ -240,7 +269,7 @@ func (e *Exporter) scrapeDatabase(ch chan<- prometheus.Metric, errChan chan<- er
 	e.logger.Debug("Successfully pinged Oracle database: "+maskDsn(d.Config.URL), "database", d.Name)
 
 	metricsToScrape := 0
-	for _, metric := range e.metricsToScrape.Metric {
+	for _, metric := range e.metricsToScrape[d.Name].Metric { // Access metrics for the specific database
 		metric := metric //https://golang.org/doc/faq#closures_and_goroutines
 		if !e.isScrapeMetric(tick, metric, d) {
 			continue
@@ -308,17 +337,26 @@ func (e *Exporter) scrapeDatabase(ch chan<- prometheus.Metric, errChan chan<- er
 
 func (e *Exporter) scrape(ch chan<- prometheus.Metric, tick *time.Time) {
 	e.totalScrapes.Inc()
-	errChan := make(chan error, len(e.metricsToScrape.Metric)*len(e.databases))
-	begun := time.Now()
-	if e.checkIfMetricsChanged() {
-		e.reloadMetrics()
+	// Calculate total metrics across all databases for errChan sizing
+	totalMetricsCount := 0
+	for _, metrics := range e.metricsToScrape {
+		totalMetricsCount += len(metrics.Metric)
 	}
+	errChan := make(chan error, totalMetricsCount*len(e.databases))
+	begun := time.Now()
 
 	// Scrape all databases
 	asyncTasksCh := make(chan int)
 	for _, db := range e.databases {
 		db := db
 		go func() {
+			if e.checkIfMetricsChanged(db) {
+				if err := e.reloadMetrics(db); err != nil {
+					e.logger.Error("Failed to reload metrics for database", "database", db.Name, "error", err)
+					// Decide how to handle this error: continue with old metrics, or skip scraping this DB
+					// For now, we'll log and continue with potentially stale metrics for this DB
+				}
+			}
 			asyncTasksCh <- e.scrapeDatabase(ch, errChan, db, tick)
 		}()
 	}
@@ -348,21 +386,32 @@ func (e *Exporter) GetDBs() []*Database {
 	return e.databases
 }
 
-func (e *Exporter) checkIfMetricsChanged() bool {
-	for i, _customMetrics := range e.CustomMetricsFiles() {
-		if len(_customMetrics) == 0 {
+func (e *Exporter) checkIfMetricsChanged(d *Database) bool {
+	if d.Config.Metrics == nil || len(d.Config.Metrics.Custom) == 0 {
+		return false // No custom metrics to check for this database
+	}
+
+	e.metricsHashMu.Lock()
+	defer e.metricsHashMu.Unlock()
+
+	if _, ok := hashMap[d.Name]; !ok {
+		hashMap[d.Name] = make(map[int][]byte)
+	}
+
+	for i, customMetricFile := range d.Config.Metrics.Custom {
+		if len(customMetricFile) == 0 {
 			continue
 		}
-		e.logger.Debug("Checking modifications in following metrics definition file:" + _customMetrics)
+		e.logger.Debug("Checking modifications in following metrics definition file for database "+d.Name+": "+customMetricFile, "database", d.Name)
 		h := sha256.New()
-		if err := hashFile(h, _customMetrics); err != nil {
-			e.logger.Error("Unable to get file hash", "error", err)
+		if err := hashFile(h, customMetricFile); err != nil {
+			e.logger.Error("Unable to get file hash for custom metrics file", "file", customMetricFile, "error", err, "database", d.Name)
 			return false
 		}
 		// If any of files has been changed reload metrics
-		if !bytes.Equal(hashMap[i], h.Sum(nil)) {
-			e.logger.Info(_customMetrics + " has been changed. Reloading metrics...")
-			hashMap[i] = h.Sum(nil)
+		if !bytes.Equal(hashMap[d.Name][i], h.Sum(nil)) {
+			e.logger.Info(customMetricFile+" has been changed for database "+d.Name+". Reloading metrics...", "database", d.Name)
+			hashMap[d.Name][i] = h.Sum(nil)
 			return true
 		}
 	}
@@ -381,29 +430,33 @@ func hashFile(h hash.Hash, fn string) error {
 	return nil
 }
 
-func (e *Exporter) reloadMetrics() {
-	// Truncate metricsToScrape
-	e.metricsToScrape.Metric = []Metric{}
+func (e *Exporter) reloadMetrics(d *Database) error {
+	e.metricsHashMu.Lock()
+	defer e.metricsHashMu.Unlock()
+
+	metrics := &Metrics{}
 
 	// Load default metrics
 	defaultMetrics := e.DefaultMetrics()
-	e.metricsToScrape.Metric = defaultMetrics.Metric
+	metrics.Metric = defaultMetrics.Metric
 
-	// If custom metrics, load it
-	if len(e.CustomMetricsFiles()) > 0 {
-		for _, _customMetrics := range e.CustomMetricsFiles() {
-			metrics := &Metrics{}
-			if _, err := toml.DecodeFile(_customMetrics, metrics); err != nil {
-				e.logger.Error("failed to load custom metrics", "error", err)
-				panic(errors.New("Error while loading " + _customMetrics))
+	// If custom metrics, load them
+	if d.Config.Metrics != nil && len(d.Config.Metrics.Custom) > 0 {
+		for _, customMetricFile := range d.Config.Metrics.Custom {
+			customMetrics := &Metrics{}
+			if _, err := toml.DecodeFile(customMetricFile, customMetrics); err != nil {
+				e.logger.Error("failed to load custom metrics", "file", customMetricFile, "error", err, "database", d.Name)
+				return fmt.Errorf("error while loading %s for database %s: %w", customMetricFile, d.Name, err)
 			} else {
-				e.logger.Info("Successfully loaded custom metrics from " + _customMetrics)
+				e.logger.Info("Successfully loaded custom metrics from", "file", customMetricFile, "database", d.Name)
 			}
-			e.metricsToScrape.Metric = append(e.metricsToScrape.Metric, metrics.Metric...)
+			metrics.Metric = append(metrics.Metric, customMetrics.Metric...)
 		}
 	} else {
-		e.logger.Debug("No custom metrics defined.")
+		e.logger.Debug("No custom metrics defined for database", "database", d.Name)
 	}
+	e.metricsToScrape[d.Name] = *metrics
+	return nil
 }
 
 // ScrapeMetric is an interface method to call scrapeGenericValues using Metric struct values

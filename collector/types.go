@@ -17,7 +17,8 @@ import (
 type Exporter struct {
 	*MetricsConfiguration
 	mu              *sync.Mutex
-	metricsToScrape Metrics
+	metricsToScrape map[string]Metrics // Changed to map[string]Metrics
+	metricsHashMu   *sync.Mutex        // Mutex for protecting hashMap access
 	duration, error prometheus.Gauge
 	totalScrapes    prometheus.Counter
 	scrapeErrors    *prometheus.CounterVec

@@ -29,8 +29,9 @@ type DatabaseConfig struct {
 	Password      string
 	URL           string `yaml:"url"`
 	ConnectConfig `yaml:",inline"`
-	Vault         *VaultConfig      `yaml:"vault,omitempty"`
-	Labels        map[string]string `yaml:"labels,omitempty"`
+	Vault         *VaultConfig        `yaml:"vault,omitempty"`
+	Labels        map[string]string   `yaml:"labels,omitempty"`
+	Metrics       *MetricsFilesConfig `yaml:"metrics,omitempty"`
 }
 
 type ConnectConfig struct {
@@ -199,8 +200,27 @@ func (m *MetricsConfiguration) merge(cfg *Config, path string) {
 	}
 	m.mergeLoggingConfig(cfg)
 	m.mergeMetricsConfig(cfg)
+	m.mergeDatabaseMetricsConfig(cfg)
 	if m.Metrics.ScrapeInterval == nil {
 		m.Metrics.ScrapeInterval = &cfg.ScrapeInterval
+	}
+}
+
+func (m *MetricsConfiguration) mergeDatabaseMetricsConfig(cfg *Config) {
+	for dbName, dbConfig := range m.Databases {
+		if dbConfig.Metrics == nil {
+			dbConfig.Metrics = &MetricsFilesConfig{}
+		}
+		if len(dbConfig.Metrics.Default) == 0 {
+			dbConfig.Metrics.Default = m.Metrics.Default
+		}
+		if len(dbConfig.Metrics.Custom) == 0 {
+			dbConfig.Metrics.Custom = m.Metrics.Custom
+		}
+		if dbConfig.Metrics.ScrapeInterval == nil {
+			dbConfig.Metrics.ScrapeInterval = m.Metrics.ScrapeInterval
+		}
+		m.Databases[dbName] = dbConfig
 	}
 }
 
